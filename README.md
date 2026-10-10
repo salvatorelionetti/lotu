@@ -15,3 +15,23 @@ Select and run periodically audit.
 
 ## Constantly Observe ("Turris")
 Enable the logging on the edge of either hardware and software, to know timely and precisely who is (trying) to (ab)use your service.
+
+# Current setup
+
+## Hardware
+Fiber <=> FritzBox <=> Raspberry Pi 5
+
+## Update
+Updates are done manually once per week.
+
+| Device   |      Software      |  Update Command|
+|----------|-------------|------|
+| Fritz Box | Fritz OS | Check from the webpage |
+| Raspberry Pi 5 | Debian Trixie | apt update && apt upgrade |
+| Raspberry Pi 5 | Next Cloud | php updater/updater.phar | 
+| Swift Lite 14 | CachyOS | GUI trigger it every  few days |
+
+# Professional solutions
+https://ui.com/
+https://www.home-assistant.io/green
+https://uptime.kuma.pet/
