@@ -1,0 +1,13 @@
+[Unit]
+Description=Propagate network changes, ssh/nextcloud login attempt and FritzBox events into NextCloud Talk
+
+[Service]
+Type=simple
+# Assicura che l'ambiente usi la home corretta per trovare token o configurazioni
+WorkingDirectory=%h
+ExecStart=/usr/bin/python3 %h/scripts/fritz_log_read2.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
