@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import fritzconnection
 import talk2
 import configparser
+import annota_mac
 
 config = configparser.ConfigParser()
 config.read('lotu.ini')
@@ -37,6 +38,14 @@ if not do_read_events:
 
 conn = None
 current_logs = None
+annotator = None
+
+# Read the mac <-> hostname <-> ip expected.
+try:
+    annotator = annota_mac.AnnotatoreMac("mac_hostname_ip.tsv")
+except FileNotFoundError as e:
+    print(f"Errore: il file '{e.filename}' non è stato trovato.")
+    print('Continuo senza note')
 
 FRITZ_DATETIME_FMT='%d.%m.%y %H:%M:%S'
 RADAR_DATETIME_FMT='%Y:%m.%d %H:%M:%S'
@@ -221,6 +230,10 @@ while True:
             for entry in new_entries:
                 line, dt, gruppo, msg = parse_riga_log(entry)
                 print(line) #dt, f'[{gruppo}]', msg)
+                if annotator is None:
+                    line = line + ' [DB not found!!!]'
+                else:
+                    line = annotator.annota(line)
                 notifica(line)
                 sys.stdout.flush() # Forza la scrittura immediata sul terminale
             
