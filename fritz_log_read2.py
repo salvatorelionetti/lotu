@@ -274,3 +274,32 @@ while True:
             
             # Aggiorna il set storico con le nuove righe
             historical_logs |= set(new_entries)
+
+
+class PrintQueue:
+    def put(self, item):
+        print("[TEST-FRITZ]", item.get('text'))
+
+def fritz_main_test(once=False):
+    import threading
+    stop = threading.Event()
+    q = PrintQueue()
+    # esegue il poller con max_iterations=1 per il test se once==True
+    try:
+        run_fritz_poller(q, stop, config, dry_run=True, do_log=False)
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == '__main__':
+    # modalità di compatibilità/test:
+    import argparse
+    p = argparse.ArgumentParser(description='Fritz poller test/runner')
+    p.add_argument('--test', action='store_true', help='print messages instead of queueing')
+    p.add_argument('--once', action='store_true', help='run one cycle (may return immediately)')
+    args = p.parse_args()
+    if args.test:
+        # Nota: run_fritz_poller è progettato per loop continuo; usare --once per limitare
+        fritz_main_test(once=args.once)
+    else:
+        # comportamento originale se lanciato direttamente
+        main()

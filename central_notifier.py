@@ -120,6 +120,5 @@ def main():
     notifier_loop(stop_event, dispatch_queue, CONFIG)
     print('central_notifier stopped')
 
-
 if __name__ == '__main__':
     main()
