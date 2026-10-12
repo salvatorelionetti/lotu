@@ -8,6 +8,8 @@ import fritzconnection
 import talk2
 import configparser
 import annota_mac
+import parse_events2
+import emoji
 
 config = configparser.ConfigParser()
 config.read('lotu.ini')
@@ -31,6 +33,8 @@ PASSWORD= config['talk']['PASSWORD']
 
 # Scripts parameters
 do_read_events = True
+dry_run = '--dry-run' in sys.argv
+do_log = '--log' in sys.argv
 
 if not do_read_events:
     # Reduce the frequency when in dry run mode.
@@ -64,6 +68,8 @@ def notifica_bot(testo, room=ROOM_TOKEN, reply_to=None, silent=False):
         raise RuntimeError(f"Invio fallito: HTTP {r.status_code} - {r.text[:200]}")
 
 def notifica(testo, room=ROOM_TOKEN, reply_to=None, silent=False):
+    if dry_run:
+        return
     return talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, testo, ROOM_TOKEN,
                               reply_to=reply_to, silent=silent)
 
@@ -192,7 +198,10 @@ while True:
                 log('home_reader', 'Skipping event read...')
                 notifica(f'Skipping event read. Now is {ts}')
             else:
-                msg_id = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, f"{ts}\nHello from Raspi5 :):", ROOM_TOKEN)
+                if dry_run:
+                    msg_id = -1
+                else:
+                    msg_id = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, f"{ts}\nHello from Raspi5 :):", ROOM_TOKEN)
                 log('BOOT.1 Welcome msg posted, id', msg_id)
                 #message = talk2.wait_message(NC_URL, BOT_USER, BOT_SECRET, msg_id, ROOM_TOKEN)
                 #log('BOOT.2 Message read from user:', message, 'len', len(message))
@@ -204,7 +213,7 @@ while True:
                 historical_logs = set(get_remote_logs(conn))
                 for entry in historical_logs:
                     line, dt, gruppo, msg = parse_riga_log(entry)
-                    print(line) #, dt, f'[{gruppo}]', msg)
+                    #print(line) #, dt, f'[{gruppo}]', msg)
                     #notifica(line)
                     sys.stdout.flush()
                 log('home_reader', 'Initial log read successfully!')
@@ -229,11 +238,37 @@ while True:
         if new_entries:
             for entry in new_entries:
                 line, dt, gruppo, msg = parse_riga_log(entry)
-                print(line) #dt, f'[{gruppo}]', msg)
+                print('GOT:', line)
+
+                # Ideal case: event parsed and info aligned with the db.
+                note = ''
+                icon = ':rainbow:'
+
                 if annotator is None:
-                    line = line + ' [DB not found!!!]'
+                    # When DB is missing, no need to parse the event.
+                    icon = ':woman_shrugging:'
+                    note = '[No DB]'
+                    print('No annotator')
                 else:
-                    line = annotator.annota(line)
+                    event = parse_events2.parse_event(entry, do_log=do_log)
+                    if event is None:
+                        # No timestamp structure recognized
+                        print('No timestamp structure recognized')
+                        icon = ':exclamation_question_mark:'
+                    elif not event.is_valid:
+                        # Other non connect/disconnect events. TODO add/demote.
+                        print('Other non connect/disconnect events')
+                        icon = ':exclamation_question_mark:'
+                    else:
+                        print('Invoking confronta', event.mac, event.hostname, event.ip)
+                        note = annotator.confronta(event.mac, event.hostname, event.ip)
+                        if len(note)>0:
+                            print('Got a note:', note)
+                            note = '[DB reports '+note + ']'
+                            icon = ':no_entry:'
+
+                line = emoji.emojize(icon) + f' {line} {note}'
+                print('notify:', line)
                 notifica(line)
                 sys.stdout.flush() # Forza la scrittura immediata sul terminale
             
