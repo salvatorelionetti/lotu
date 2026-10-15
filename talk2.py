@@ -25,6 +25,7 @@ import hmac
 import os
 import secrets
 import sys
+import configparser
 
 import requests
 from http import HTTPStatus
@@ -50,8 +51,7 @@ def load_secret(secret_file, secret_inline):
 
 
 def send_message(base_url, user, secret, message, room,
-                 reply_to=None, silent=False, reference_id=None,
-                 verify_tls=True, timeout=15):
+                 reply_to=None, silent=False, verify_tls=True, timeout=15):
 
     # Inizializzazione della sessione HTTP con gli header obbligatori
     session = requests.Session()
@@ -143,7 +143,7 @@ def wait_message(base_url, user, secret, last_msg_id, room):
                             
 def send_bot_message(base_url, room_token, bot_secret, message,
                      reply_to=None, silent=False, reference_id=None,
-                     verify_tls=True, timeout=15):
+                     verify_tls=True, timeout=15, do_log=False):
     """Pubblica un messaggio nella chat come bot. Ritorna la risposta HTTP."""
     # Nonce casuale (almeno 32 caratteri) + firma HMAC-SHA256 di (random + message)
     random_hdr = secrets.token_hex(32)
@@ -171,8 +171,15 @@ def send_bot_message(base_url, room_token, bot_secret, message,
         (random_hdr + message).encode("utf-8")
     ).hexdigest()
 
-    return requests.post(url, json=payload, headers=headers,
-                         verify=verify_tls, timeout=timeout)
+    if do_log:
+        print('send_bot_message:')
+        print(' url', url)
+        print(' pay', payload)
+    ret = requests.post(url, json=payload, headers=headers,
+                        verify=verify_tls, timeout=timeout)
+    if do_log:
+        print(' ret', ret)
+    return ret
 
 def main():
     p = argparse.ArgumentParser(description="Invia un messaggio Nextcloud Talk come bot")
@@ -194,17 +201,23 @@ def main():
 
     args.secret = load_secret(args.secret_file, args.secret)
 
-    missing = [n for n, v in (("NC_URL", args.url), ("NC_ROOM_TOKEN", args.room),
-                              ("NC_BOT_SECRET_FILE/NC_BOT_SECRET", args.secret)) if not v]
-    if missing:
-        sys.exit(f"Parametri mancanti: {', '.join(missing)}")
+    CONFIG = configparser.ConfigParser()
+    CONFIG.read('lotu.ini')
+
+    url    = CONFIG['talk']['NC_URL']
+    room   = CONFIG['talk']['ROOM_TOKEN']
+    user   = CONFIG['talk']['BOT_USER']
+    secret = CONFIG['talk']['BOT_SECRET']
+
+#    missing = [n for n, v in (("NC_URL", args.url), ("NC_ROOM_TOKEN", args.room),
+#                              ("NC_BOT_SECRET_FILE/NC_BOT_SECRET", args.secret)) if not v]
+#    if missing:
+#        sys.exit(f"Parametri mancanti: {', '.join(missing)}")
 
     message = sys.stdin.read().rstrip("\n") if args.message == "-" else args.message
 
     try:
-        r = send_bot_message(args.url, args.room, args.secret, message,
-                             reply_to=args.reply_to, silent=args.silent,
-                             verify_tls=not args.insecure)
+        r = send_message(url, user, secret, message, room)
     except requests.RequestException as e:
         sys.exit(f"Errore di rete: {e}")
 

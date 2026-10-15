@@ -22,9 +22,9 @@ def run_fail2ban_tailer(notify_queue, stop_event, cfg=None, test_mode=False, max
                provide a PrintQueue wrapper)
     max_iterations: optional limit for loops (useful for tests)
     """
-    cfg = cfg or configparser.ConfigParser()
-    if not cfg.sections():
-        cfg.read('lotu.ini')
+#    cfg = cfg or configparser.ConfigParser()
+#    if not cfg.sections():
+#        cfg.read('lotu.ini')
 
     log_path = cfg.get('fail2ban', 'LOG_PATH', fallback='/var/log/fail2ban.log')
     room_token = cfg.get('talk', 'ROOM_TOKEN', fallback=None)

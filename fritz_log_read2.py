@@ -11,49 +11,6 @@ import annota_mac
 import parse_events2
 import emoji
 
-config = configparser.ConfigParser()
-config.read('lotu.ini')
-
-# Fritz.box parameters
-FB_IP = config['fritzbox']['FB_IP']
-USER = config['fritzbox']['USER']
-POLL_INTERVAL = config['fritzbox'].getint('POLL_INTERVAL')
-print('POLL_INTERVAL', POLL_INTERVAL)
-OUTPUT_XML = config['fritzbox']['OUTPUT_XML']
-
-# Talk2 parameters
-NC_URL= config['talk']['NC_URL']
-ROOM_TOKEN= config['talk']['ROOM_TOKEN']
-# Bot
-#SECRET = talk2.load_secret(os.path.expanduser("~/radarbot.token"), None)
-# User bot
-BOT_USER= config['talk']['BOT_USER']
-BOT_SECRET= config['talk']['BOT_SECRET']
-PASSWORD= config['talk']['PASSWORD']
-
-# Scripts parameters
-do_read_events = True
-dry_run = '--dry-run' in sys.argv
-do_log = '--log' in sys.argv
-
-if not do_read_events:
-    # Reduce the frequency when in dry run mode.
-    POLL_INTERVAL=60
-
-conn = None
-current_logs = None
-annotator = None
-
-# Read the mac <-> hostname <-> ip expected.
-try:
-    annotator = annota_mac.AnnotatoreMac("mac_hostname_ip.tsv")
-except FileNotFoundError as e:
-    print(f"Errore: il file '{e.filename}' non è stato trovato.")
-    print('Continuo senza note')
-
-FRITZ_DATETIME_FMT='%d.%m.%y %H:%M:%S'
-RADAR_DATETIME_FMT='%Y:%m.%d %H:%M:%S'
-
 # Test send / recv message to / from the chat.
 #msg_id  = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, 'Inserisci OTP per autenticazione...', ROOM_TOKEN)
 #print('1) Msg posted id', msg_id)
@@ -61,17 +18,39 @@ RADAR_DATETIME_FMT='%Y:%m.%d %H:%M:%S'
 #print('2) Message read', message)
 #sys.exit(0)
 
-def notifica_bot(testo, room=ROOM_TOKEN, reply_to=None, silent=False):
-    r = talk2.send_bot_message(NC_URL, room, BOT_SECRET, testo,
-                         reply_to=reply_to, silent=silent)
-    if r.status_code != 201:
-        raise RuntimeError(f"Invio fallito: HTTP {r.status_code} - {r.text[:200]}")
+# Scripts parameters
+do_read_events = True
+dry_run = '--dry-run' in sys.argv
+do_log = '--log' in sys.argv
 
-def notifica(testo, room=ROOM_TOKEN, reply_to=None, silent=False):
+FRITZ_DATETIME_FMT='%d.%m.%y %H:%M:%S'
+RADAR_DATETIME_FMT='%Y:%m.%d %H:%M:%S'
+OUTPUT_XML=None
+
+#    global conf
+#
+#    r = talk2.send_bot_message(NC_URL, room, BOT_SECRET, testo,
+#                         reply_to=reply_to, silent=silent)
+#    if r.status_code != 201:
+#        raise RuntimeError(f"Invio fallito: HTTP {r.status_code} - {r.text[:200]}")
+
+def notifica(queue, room, msg, reply_to=None, silent=False):
+    global q
+
     if dry_run:
         return
-    return talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, testo, ROOM_TOKEN,
-                              reply_to=reply_to, silent=silent)
+
+    payload = {
+        'source': 'fritzlog',
+        'text': msg,
+        'room': room,
+        'silent': silent,
+    }
+    queue.put(payload)
+    #print('Sent to the queue!!!')
+
+#    return talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, testo, Conf.ROOM_TOKEN,
+#                              reply_to=reply_to, silent=silent)
 
 def log(*args, **kwargs):
     #ts = datetime.datetime.now().strftime('%d.%b %Y %H:%M:%S')
@@ -188,92 +167,133 @@ def get_remote_logs(conn):
         print(f"Errore nel recupero dei log estesi: {e}")
         return ""
 
-log('home_reader', '--- Inizio monitoraggio log ---')
+def run_fritz_poller(notify_queue, stop_event, cfg=None, test_mode=False, max_iterations=None):
+    global OUTPUT_XML
 
-while True:
+    # Fritz.box parameters
+    FB_IP = cfg['fritzbox']['FB_IP']
+    USER = cfg['fritzbox']['USER']
+    PASSWORD= cfg['fritzbox']['PASSWORD']
+    POLL_INTERVAL = cfg['fritzbox'].getint('POLL_INTERVAL')
+    print('POLL_INTERVAL', POLL_INTERVAL)
+    OUTPUT_XML = cfg['fritzbox']['OUTPUT_XML']
+
+    # Talk2 parameters
+    NC_URL= cfg['talk']['NC_URL']
+    ROOM_TOKEN= cfg['talk']['ROOM_TOKEN']
+    # Bot
+    #SECRET = talk2.load_secret(os.path.expanduser("~/radarbot.token"), None)
+    # User bot
+    BOT_USER= cfg['talk']['BOT_USER']
+    BOT_SECRET= cfg['talk']['BOT_SECRET']
+
+    # Scripts parameters
+    do_read_events = True
+    dry_run = '--dry-run' in sys.argv
+    do_log = '--log' in sys.argv
+
+    if not do_read_events:
+        # Reduce the frequency when in dry run mode.
+        POLL_INTERVAL=60
+
+    conn = None
+    current_logs = None
+    annotator = None
+
+    # Read the mac <-> hostname <-> ip expected.
     try:
-        if conn is None:
-            ts = datetime.datetime.now().strftime(RADAR_DATETIME_FMT)
-            if not do_read_events:
-                log('home_reader', 'Skipping event read...')
-                notifica(f'Skipping event read. Now is {ts}')
-            else:
-                if dry_run:
-                    msg_id = -1
+        annotator = annota_mac.AnnotatoreMac("mac_hostname_ip.tsv")
+    except FileNotFoundError as e:
+        print(f"Errore: il file '{e.filename}' non è stato trovato.")
+        print('Continuo senza note')
+
+    log('home_reader', '--- Inizio monitoraggio log ---')
+
+    while True:
+        try:
+            if conn is None:
+                ts = datetime.datetime.now().strftime(RADAR_DATETIME_FMT)
+                if not do_read_events:
+                    log('home_reader', 'Skipping event read...')
+                    notifica(notify_queue, ROOM_TOKEN, f'Skipping event read. Now is {ts}')
                 else:
-                    msg_id = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, f"{ts}\nHello from Raspi5 :):", ROOM_TOKEN)
-                log('BOOT.1 Welcome msg posted, id', msg_id)
-                #message = talk2.wait_message(NC_URL, BOT_USER, BOT_SECRET, msg_id, ROOM_TOKEN)
-                #log('BOOT.2 Message read from user:', message, 'len', len(message))
+                    #if dry_run:
+                    #    msg_id = -1
+                    #else:
+                    #    msg_id = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, f"{ts}\nHello from Raspi5 :):", ROOM_TOKEN)
+                    notifica(notify_queue, ROOM_TOKEN, f"{ts}\nHello from Raspi5 :):")
+                    log('BOOT.1 Welcome msg posted, id') #, msg_id
+                    #message = talk2.wait_message(NC_URL, BOT_USER, BOT_SECRET, msg_id, ROOM_TOKEN)
+                    #log('BOOT.2 Message read from user:', message, 'len', len(message))
 
-                log('home_reader', 'Connecting...')
-                notifica('Connecting...')
-                conn = fritzconnection.FritzConnection(address=FB_IP, user=USER, password=PASSWORD, use_tls=True)
-                # Al primo avvio, memorizza lo stato attuale per non ristampare l'intero storico
-                historical_logs = set(get_remote_logs(conn))
-                for entry in historical_logs:
-                    line, dt, gruppo, msg = parse_riga_log(entry)
-                    #print(line) #, dt, f'[{gruppo}]', msg)
-                    #notifica(line)
-                    sys.stdout.flush()
-                log('home_reader', 'Initial log read successfully!')
-                notifica('Initial log read successfully!')
+                    log('home_reader', 'Connecting...')
+                    notifica(notify_queue, ROOM_TOKEN, 'Connecting...')
+                    conn = fritzconnection.FritzConnection(address=FB_IP, user=USER, password=PASSWORD, use_tls=True)
+                    # Al primo avvio, memorizza lo stato attuale per non ristampare l'intero storico
+                    historical_logs = set(get_remote_logs(conn))
+                    for entry in historical_logs:
+                        line, dt, gruppo, msg = parse_riga_log(entry)
+                        #print(line) #, dt, f'[{gruppo}]', msg)
+                        #notifica(line)
+                        sys.stdout.flush()
+                    log('home_reader', 'Initial log read successfully!')
+                    notifica(notify_queue, ROOM_TOKEN, 'Initial log read successfully!')
 
-    except Exception as e:
-        log('home_reader', f'home_reader Errore di connessione iniziale: {e}, retry', file=sys.stderr)
-        pass
+        except Exception as e:
+            log('home_reader', f'home_reader Errore durante la  connessione iniziale: {e}, retry', file=sys.stderr)
+            pass
 
-    try:
-        time.sleep(POLL_INTERVAL)
-    except KeyboardInterrupt:
-        log("\nhome_reader: Monitoraggio interrotto dall'utente.")
-        sys.exit(0)
+        try:
+            time.sleep(POLL_INTERVAL)
+        except KeyboardInterrupt:
+            log("\nhome_reader: Monitoraggio interrotto dall'utente.")
+            sys.exit(0)
 
-    if do_read_events and (conn is not None):
-        current_logs = get_remote_logs(conn)
-        
-        # Identifica solo le righe nuove che non erano presenti nel set precedente
-        new_entries = [line for line in current_logs if line not in historical_logs]
-        
-        if new_entries:
-            for entry in new_entries:
-                line, dt, gruppo, msg = parse_riga_log(entry)
-                print('GOT:', line)
-
-                # Ideal case: event parsed and info aligned with the db.
-                note = ''
-                icon = ':rainbow:'
-
-                if annotator is None:
-                    # When DB is missing, no need to parse the event.
-                    icon = ':woman_shrugging:'
-                    note = '[No DB]'
-                    print('No annotator')
-                else:
-                    event = parse_events2.parse_event(entry, do_log=do_log)
-                    if event is None:
-                        # No timestamp structure recognized
-                        print('No timestamp structure recognized')
-                        icon = ':exclamation_question_mark:'
-                    elif not event.is_valid:
-                        # Other non connect/disconnect events. TODO add/demote.
-                        print('Other non connect/disconnect events')
-                        icon = ':exclamation_question_mark:'
-                    else:
-                        print('Invoking confronta', event.mac, event.hostname, event.ip)
-                        note = annotator.confronta(event.mac, event.hostname, event.ip)
-                        if len(note)>0:
-                            print('Got a note:', note)
-                            note = '[DB reports '+note + ']'
-                            icon = ':no_entry:'
-
-                line = emoji.emojize(icon) + f' {line} {note}'
-                print('notify:', line)
-                notifica(line)
-                sys.stdout.flush() # Forza la scrittura immediata sul terminale
+        if do_read_events and (conn is not None):
+            current_logs = get_remote_logs(conn)
             
-            # Aggiorna il set storico con le nuove righe
-            historical_logs |= set(new_entries)
+            # Identifica solo le righe nuove che non erano presenti nel set precedente
+            new_entries = [line for line in current_logs if line not in historical_logs]
+            
+            if new_entries:
+                for entry in new_entries:
+                    line, dt, gruppo, msg = parse_riga_log(entry)
+                    print('GOT:', line)
+
+                    # Ideal case: event parsed and info aligned with the db.
+                    note = ''
+                    icon = ':rainbow:'
+
+                    if annotator is None:
+                        # When DB is missing, no need to parse the event.
+                        icon = ':woman_shrugging:'
+                        note = '[No DB]'
+                        print('No annotator')
+                    else:
+                        event = parse_events2.parse_event(entry, do_log=do_log)
+                        if event is None:
+                            # No timestamp structure recognized
+                            print('No timestamp structure recognized')
+                            icon = ':exclamation_question_mark:'
+                        elif not event.is_valid:
+                            # Other non connect/disconnect events. TODO add/demote.
+                            print('Other non connect/disconnect events')
+                            icon = ':exclamation_question_mark:'
+                        else:
+                            print('Invoking confronta', event.mac, event.hostname, event.ip)
+                            note = annotator.confronta(event.mac, event.hostname, event.ip)
+                            if len(note)>0:
+                                print('Got a note:', note)
+                                note = '[DB reports '+note + ']'
+                                icon = ':no_entry:'
+
+                    line = emoji.emojize(icon) + f' {line} {note}'
+                    print('notify:', line)
+                    notifica(notify_queue, ROOM_TOKEN, line)
+                    sys.stdout.flush() # Forza la scrittura immediata sul terminale
+                
+                # Aggiorna il set storico con le nuove righe
+                historical_logs |= set(new_entries)
 
 
 class PrintQueue:

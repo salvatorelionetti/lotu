@@ -25,7 +25,6 @@ CONFIG.read('lotu.ini')
 
 SEND_LOCK = threading.Lock()
 
-
 def get_bot_secret(cfg):
     talk_cfg = cfg['talk']
     secret = talk_cfg.get('BOT_SECRET') or os.environ.get('NC_BOT_SECRET')
@@ -38,7 +37,8 @@ def get_bot_secret(cfg):
     return None
 
 
-def send_to_nextcloud(item, cfg):
+def send_to_nextcloud(item, cfg, timeout=15, do_log=False):
+    print('send_to_nextcloud', item)
     text = (item.get('text') or '').strip()
     if not text:
         return
@@ -55,30 +55,40 @@ def send_to_nextcloud(item, cfg):
 
     with SEND_LOCK:
         try:
-            response = talk2.send_bot_message(
-                cfg['talk']['NC_URL'],
-                room_token,
-                bot_secret,
+
+            url    = cfg['talk']['NC_URL']
+            room   = cfg['talk']['ROOM_TOKEN']
+            user   = cfg['talk']['BOT_USER']
+            secret = cfg['talk']['BOT_SECRET']
+
+            msg_id = talk2.send_message(
+                url,
+                user,
+                secret,
                 text,
+                room,
                 reply_to=item.get('reply_to'),
                 silent=bool(item.get('silent', False)),
                 verify_tls=not bool(item.get('insecure', False)),
+                timeout=timeout,
             )
-            if response is not None and getattr(response, 'status_code', 0) not in (200, 201, 202):
-                print(f"HTTP {response.status_code}: {response.text[:200]}", file=sys.stderr)
+            print('msg_id', msg_id)
+            #if response is not None and getattr(response, 'status_code', 0) not in (200, 201, 202):
+            #    print(f"HTTP {response.status_code}: {response.text[:200]}", file=sys.stderr)
         except Exception:
             traceback.print_exc(file=sys.stderr)
 
 
-def notifier_loop(stop_event, dispatch_queue, cfg):
+def notifier_loop(stop_event, dispatch_queue, cfg, do_log=False):
     while not stop_event.is_set():
         try:
             item = dispatch_queue.get(timeout=1)
+            print('notifier_loop: GOT', item)
         except queue.Empty:
             continue
 
         try:
-            send_to_nextcloud(item, cfg)
+            send_to_nextcloud(item, cfg, do_log=do_log)
         except Exception:
             traceback.print_exc(file=sys.stderr)
         finally:
@@ -86,7 +96,6 @@ def notifier_loop(stop_event, dispatch_queue, cfg):
 
 
 def start_workers(dispatch_queue, stop_event, cfg):
-    assert(False)
     workers = [
         threading.Thread(
             target=run_fritz_poller,
@@ -109,15 +118,13 @@ def start_workers(dispatch_queue, stop_event, cfg):
     ]
 
     for thread in workers:
-        print(thread)
+        print('Start', thread)
         thread.start()
 
     return workers
 
 
 def main():
-    print('IN MAIN2')
-    assert(1==0)
     stop_event = threading.Event()
 
     def _stop_handler(signum, frame):
@@ -128,10 +135,8 @@ def main():
 
     dispatch_queue = queue.Queue()
     start_workers(dispatch_queue, stop_event, CONFIG)
-    notifier_loop(stop_event, dispatch_queue, CONFIG)
+    notifier_loop(stop_event, dispatch_queue, CONFIG, do_log=True)
     print('central_notifier stopped')
 
-print('BEFORE MAIN')
 if __name__ == '__main__':
-    print('BEFORE MAIN2')
     main()
