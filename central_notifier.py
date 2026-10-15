@@ -18,6 +18,7 @@ import talk2
 
 from fail2ban_tailer import run_fail2ban_tailer
 from fritz_log_read2 import run_fritz_poller
+from auth_log_tailer import run_auth_tailer
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read('lotu.ini')
@@ -85,6 +86,7 @@ def notifier_loop(stop_event, dispatch_queue, cfg):
 
 
 def start_workers(dispatch_queue, stop_event, cfg):
+    assert(False)
     workers = [
         threading.Thread(
             target=run_fritz_poller,
@@ -98,15 +100,24 @@ def start_workers(dispatch_queue, stop_event, cfg):
             name='fail2ban-tailer',
             daemon=True,
         ),
+        threading.Thread(
+            target=run_auth_tailer,
+            args=(dispatch_queue, stop_event, cfg),
+            name='auth-log-tailer',
+            daemon=True,
+        ),
     ]
 
     for thread in workers:
+        print(thread)
         thread.start()
 
     return workers
 
 
 def main():
+    print('IN MAIN2')
+    assert(1==0)
     stop_event = threading.Event()
 
     def _stop_handler(signum, frame):
@@ -120,5 +131,7 @@ def main():
     notifier_loop(stop_event, dispatch_queue, CONFIG)
     print('central_notifier stopped')
 
+print('BEFORE MAIN')
 if __name__ == '__main__':
+    print('BEFORE MAIN2')
     main()
