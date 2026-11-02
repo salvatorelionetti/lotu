@@ -10,6 +10,7 @@ import configparser
 import annota_mac
 import parse_events2
 import emoji
+from lotu_bus import WifiEvent
 
 # Test send / recv message to / from the chat.
 #msg_id  = talk2.send_message(NC_URL, BOT_USER, BOT_SECRET, 'Inserisci OTP per autenticazione...', ROOM_TOKEN)
@@ -33,6 +34,22 @@ OUTPUT_XML=None
 #                         reply_to=reply_to, silent=silent)
 #    if r.status_code != 201:
 #        raise RuntimeError(f"Invio fallito: HTTP {r.status_code} - {r.text[:200]}")
+
+def publish_wifi_events(bus, entries, replay):
+    if bus is None:
+        return
+    events = []
+    for entry in entries:
+        try:
+            ev = parse_events2.parse_event(entry)
+            if ev is not None and ev.is_valid:
+                events.append(WifiEvent.from_parsed(ev, entry, replay=replay))
+        except (AssertionError, ValueError) as e:
+            print('wifi parse skipped:', e, entry)
+    events.reverse()                      # il log FritzBox è newest-first
+    events.sort(key=lambda e: e.ts)       # sort stabile
+    for e in events:
+        bus.publish(f'fritz.wifi.{e.kind}', e)
 
 def notifica(queue, room, msg, reply_to=None, silent=False):
     global q
@@ -167,7 +184,7 @@ def get_remote_logs(conn):
         print(f"Errore nel recupero dei log estesi: {e}")
         return ""
 
-def run_fritz_poller(notify_queue, stop_event, cfg=None, test_mode=False, max_iterations=None):
+def run_fritz_poller(notify_queue, stop_event, cfg=None, test_mode=False, max_iterations=None, bus=None):
     global OUTPUT_XML
 
     # Fritz.box parameters
@@ -230,13 +247,18 @@ def run_fritz_poller(notify_queue, stop_event, cfg=None, test_mode=False, max_it
                     notifica(notify_queue, ROOM_TOKEN, 'Connecting...')
                     conn = fritzconnection.FritzConnection(address=FB_IP, user=USER, password=PASSWORD, use_tls=True)
                     # Al primo avvio, memorizza lo stato attuale per non ristampare l'intero storico
-                    historical_logs = set(get_remote_logs(conn))
+                    initial = get_remote_logs(conn)
+                    historical_logs = set(initial)
+
                     for entry in historical_logs:
                         line, dt, gruppo, msg = parse_riga_log(entry)
                         #print(line) #, dt, f'[{gruppo}]', msg)
                         #notifica(line)
                         sys.stdout.flush()
                     log('home_reader', 'Initial log read successfully!')
+                    publish_wifi_events(bus, initial, replay=True)
+                    if bus: bus.publish('fritz.poll', {'ts': time.time()})
+                    log('home_reader', 'Registration done')
                     notifica(notify_queue, ROOM_TOKEN, 'Initial log read successfully!')
 
         except Exception as e:
@@ -291,9 +313,13 @@ def run_fritz_poller(notify_queue, stop_event, cfg=None, test_mode=False, max_it
                     print('notify:', line)
                     notifica(notify_queue, ROOM_TOKEN, line)
                     sys.stdout.flush() # Forza la scrittura immediata sul terminale
-                
+
                 # Aggiorna il set storico con le nuove righe
                 historical_logs |= set(new_entries)
+
+            # nel ciclo, dopo il blocco "if new_entries:" (sempre, anche senza novità):
+            publish_wifi_events(bus, new_entries, replay=False)
+            if bus: bus.publish('fritz.poll', {'ts': time.time()})
 
 
 class PrintQueue:

@@ -16,9 +16,11 @@ import traceback
 
 import talk2
 
+from lotu_bus import EventBus
 from fail2ban_tailer import run_fail2ban_tailer
 from fritz_log_read2 import run_fritz_poller
 from auth_log_tailer import run_auth_tailer
+from presence_tracker import run_presence_tracker
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read('lotu.ini')
@@ -57,7 +59,6 @@ def send_to_nextcloud(item, cfg, timeout=15, do_log=False):
         try:
 
             url    = cfg['talk']['NC_URL']
-            room   = cfg['talk']['ROOM_TOKEN']
             user   = cfg['talk']['BOT_USER']
             secret = cfg['talk']['BOT_SECRET']
 
@@ -66,7 +67,7 @@ def send_to_nextcloud(item, cfg, timeout=15, do_log=False):
                 user,
                 secret,
                 text,
-                room,
+                room_token,
                 reply_to=item.get('reply_to'),
                 silent=bool(item.get('silent', False)),
                 verify_tls=not bool(item.get('insecure', False)),
@@ -95,12 +96,21 @@ def notifier_loop(stop_event, dispatch_queue, cfg, do_log=False):
             dispatch_queue.task_done()
 
 
-def start_workers(dispatch_queue, stop_event, cfg):
+def start_workers(dispatch_queue, stop_event, cfg, bus):
+    inbox = bus.subscribe('fritz')   # prima di avviare i produttori
     workers = [
         threading.Thread(
             target=run_fritz_poller,
             args=(dispatch_queue, stop_event, cfg),
+            kwargs={'bus': bus},
             name='fritz-poller',
+            daemon=True,
+        ),
+        threading.Thread(
+            target=run_presence_tracker,
+            args=(dispatch_queue, stop_event, cfg, bus),
+            kwargs={'inbox': inbox},
+            name='presence-tracker',
             daemon=True,
         ),
         threading.Thread(
@@ -134,7 +144,8 @@ def main():
     signal.signal(signal.SIGTERM, _stop_handler)
 
     dispatch_queue = queue.Queue()
-    start_workers(dispatch_queue, stop_event, CONFIG)
+    bus = EventBus()
+    start_workers(dispatch_queue, stop_event, CONFIG, bus)
     notifier_loop(stop_event, dispatch_queue, CONFIG, do_log=True)
     print('central_notifier stopped')
 
